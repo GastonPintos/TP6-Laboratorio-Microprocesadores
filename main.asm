@@ -1,0 +1,122 @@
+.INCLUDE   "m328Pdef.inc"
+
+.EQU MASK_CS =  0b11111000
+
+.EQU POS_BTN1 = 2
+.EQU POS_BTN2 = 3
+.EQU POS_LED = 3
+
+.ORG 0
+	RJMP MAIN
+
+.ORG OVF1addr
+	RJMP OVF_ISR
+
+MAIN:
+	LDI R16,LOW(RAMEND)		;Inicializacion del stack
+	OUT SPL,R16
+	LDI R16, HIGH(RAMEND)
+	OUT SPH, R16		
+
+	CALL SET_PORTS			; Configuro puertos
+	CALL SET_TIMER1			; Configuro el timer
+
+LOOP:
+	SBIS PIND,POS_BTN1			; Si BTN1 esta en 0 saltea lo siguiente
+	RJMP BTN1_LOW
+	SBIC PIND,POS_BTN2
+	RJMP BLINK_1024		; BTN2 = 1
+	RJMP BLINK_256		; BTN2 = 0		
+
+BTN1_LOW:
+	SBIC PIND,POS_BTN2	;  Si BTN2 = 0 saltea lo siguiente
+	RJMP BLINK_64		;  BTN2 = 1
+	RJMP BLINK_FIJO		;  BTN2 = 0
+
+BLINK_FIJO:	; BTN1 = 0 && BTN2 = 0
+	LDS R16,TCCR1B
+	ANDI R16, MASK_CS
+	ORI R16,(0<<CS12)|(0<<CS11)|(0<<CS10)
+	STS TCCR1B,R16				;Timer apagado
+	SBI PORTB,POS_LED		
+	RJMP LOOP
+
+BLINK_64:	; BTN1 = 0 && BTN2 = 1
+	CALL ANTIBOUNCE_BTN2
+	LDS R16, TCCR1B
+	ANDI R16, MASK_CS
+	ORI R16, (0<<CS12)|(1<<CS11)|(1<<CS10); clk/64
+	STS TCCR1B, R16		;CS12:CS10 =>011. WGM13:WGM10 => 0000 (Modo normal) 
+	RJMP LOOP
+
+BLINK_256:	; BTN1 = 1 && BTN2 = 0
+	CALL ANTIBOUNCE_BTN1
+	LDS R16,TCCR1B
+	ANDI R16,MASK_CS
+	ORI R16, (1<<CS12)|(0<<CS11)|(0<<CS10) ; clk/256
+	STS TCCR1B,R16		;CS12:CS10 =>100. WGM13:WGM10 => 0000 (Modo normal)
+	RJMP LOOP
+
+BLINK_1024:	; BTN1 = 1 && BTN2 = 1
+	CALL ANTIBOUNCE_BTN1
+	CALL ANTIBOUNCE_BTN2
+	
+	LDS R16,TCCR1B
+	ANDI R16, MASK_CS
+	ORI R16, (1<<CS12)|(0<<CS11)|(1<<CS10) ; clk/1024
+	STS TCCR1B,R16		;CS12:CS10 =>101. WGM13:WGM10 => 0000 (Modo normal)
+	RJMP LOOP
+
+SET_PORTS:
+	SBI DDRB,POS_LED			;PB3 como salida
+	CBI DDRD,POS_BTN1
+	CBI DDRD,POS_BTN2			;PD2:PD3 como entrada
+	RET
+
+SET_TIMER1:
+	LDI R16,0
+	STS TCCR1A,R16
+	STS TCCR1B,R16		;WGM13:WGM10 => 0000 (Modo normal) 
+	LDI R16,(1<<TOIE1 )
+	STS TIMSK1,R16		;Se habilita la interrupción por overflow del timer1
+	SEI					;Se habilita la interrupción global
+	RET
+
+ANTIBOUNCE_BTN1:
+	CALL ANTIBOUNCE
+	SBIS PIND,POS_BTN1
+	RJMP LOOP			
+	RET
+
+ANTIBOUNCE_BTN2:
+	CALL ANTIBOUNCE
+	SBIS PIND,POS_BTN2	
+	RJMP LOOP			
+	RET
+
+OVF_ISR:			;ISR para cambiar estado del LED
+	CALL SET_TIMER1
+	SBIS PORTB, POS_LED		;Si el led esta prendido, se apaga 
+	RJMP TURN_ON		    ;Si el led esta apagado, se prende
+	RJMP TURN_OFF
+
+TURN_ON:
+	SBI PORTB, POS_LED
+	RETI
+TURN_OFF:
+	CBI PORTB,POS_LED
+	RETI
+
+ANTIBOUNCE:
+; Delay 80 000 cycles
+; 5ms at 16.0 MHz
+        LDI  R20, 80
+L1:     LDI  R21, 4
+L2:	LDI  R22, 250
+L3:	DEC  R22
+        BRNE L3		; Repetir 250 veces
+        DEC  R21
+        BRNE L2		; Repetir L3 unas 4 veces(Ciclos = 250*4=1000)
+	    DEC  R20
+    	BRNE L1		; Repetir L2 unas 80 veces(Ciclos = 1000*80=80000)
+	    RET
